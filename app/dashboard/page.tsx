@@ -5,6 +5,11 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Search, Send, Phone, Video, MoreVertical, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { cacheTag } from "next/dist/server/use-cache/cache-tag";
+import { headers } from "next/headers";
+import io, { Socket } from "socket.io-client";
+import { format } from "date-fns";
+
 interface Contact {
   name: string;
   image: string;
@@ -12,12 +17,23 @@ interface Contact {
   lastMessage?: string;
   lastMessageTime?: string;
 }
+interface Message {
+  sender: string;
+  receiver: string;
+  message: string;
+  time: string;
+  senderUsername: string;
+  receiverUsername: string;
+}
+
+let socket: Socket | null = null;
 
 const Page = () => {
   const [query, setQuery] = useState("");
   const [currentMessage, setCurrentMessage] = useState("");
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
 
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
 
@@ -31,9 +47,113 @@ const Page = () => {
   }, [query, allContacts]);
 
   useEffect(() => {
+    const FetchMessages = async () => {
+      if (!selectedContact) return;
+
+      try {
+        const response = await fetch(
+          `http://localhost:3001/get-messages/${selectedContact.name}`,
+          {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("token")}`,
+            },
+          }
+        );
+        const data = await response.json();
+
+        if (data.success) {
+          setMessages(
+            data.data.map((msg: any) => ({
+              sender: msg.senderId,
+              receiver: msg.receiverId,
+              message: msg.content,
+              time: msg.createdAt,
+              senderUsername: msg.senderUsername,
+              receiverUsername: msg.receiverUsername,
+            }))
+          );
+        }
+      } catch (error) {
+        console.error("Error fetching messages:", error);
+      }
+    };
+
+    FetchMessages();
+  }, [selectedContact]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!socket && token) {
+      socket = io("http://localhost:3001", {
+        auth: { token },
+      });
+
+      socket.on("connect", () => {
+        console.log("Connected to socket server");
+      });
+
+      socket.on("new-message", (message: any) => {
+        if (selectedContact?.name === message.senderUsername) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              sender: message.senderId,
+              receiver: message.receiverId,
+              message: message.content,
+              time: message.createdAt,
+              senderUsername: message.senderUsername,
+              receiverUsername: message.receiverUsername,
+            },
+          ]);
+        }
+      });
+
+      socket.on("message-sent", (message: any) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            sender: message.senderId,
+            receiver: message.receiverId,
+            message: message.content,
+            time: message.createdAt,
+            senderUsername: localStorage.getItem("username") || "",
+            receiverUsername: selectedContact?.name || "",
+          },
+        ]);
+      });
+
+      return () => {
+        socket?.disconnect();
+        socket = null;
+      };
+    }
+  }, [selectedContact]);
+
+  useEffect(() => {
     const FetchContacts = async () => {
       try {
-        const response = await fetch("http://localhost:3001/users");
+        const token = localStorage.getItem("token");
+        if (!token) {
+          router.push("/login");
+          return;
+        }
+
+        const response = await fetch("http://localhost:3001/users", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            router.push("/login");
+            return;
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
         const data = await response.json();
         const currentUser = localStorage.getItem("username");
 
@@ -50,15 +170,29 @@ const Page = () => {
         setAllContacts(formattedContacts);
       } catch (error) {
         console.error("Error fetching contacts:", error);
+        if (error instanceof Error && error.message.includes("401")) {
+          router.push("/login");
+        }
       }
     };
 
     FetchContacts();
-  }, []);
+  }, [router]);
 
-  const handleSendMessage = () => {
-    if (!currentMessage.trim()) return;
-    setCurrentMessage("");
+  const handleSendMessage = async () => {
+    if (!currentMessage.trim() || !selectedContact || !socket) return;
+
+    try {
+      socket.emit("private-message", {
+        receiverId: selectedContact.name,
+        content: currentMessage,
+        type: "text",
+      });
+
+      setCurrentMessage("");
+    } catch (error) {
+      console.error("Error sending message:", error);
+    }
   };
 
   useEffect(() => {
@@ -168,7 +302,33 @@ const Page = () => {
 
           {/* Messages Area */}
           <ScrollArea className="flex-1 p-4">
-            {/* Add messages here */}
+            <div className="space-y-4">
+              {messages.map((msg, idx) => {
+                const isCurrentUser =
+                  msg.senderUsername === localStorage.getItem("username");
+                return (
+                  <div
+                    key={idx}
+                    className={`flex ${
+                      isCurrentUser ? "justify-end" : "justify-start"
+                    }`}
+                  >
+                    <div
+                      className={`max-w-[70%] rounded-lg px-4 py-2 ${
+                        isCurrentUser
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-700 text-gray-200"
+                      }`}
+                    >
+                      <p>{msg.message}</p>
+                      <p className="text-xs opacity-50 mt-1">
+                        {format(new Date(msg.time), "HH:mm")}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </ScrollArea>
 
           {/* Message Input */}
