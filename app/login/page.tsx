@@ -66,6 +66,7 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.token);
+      localStorage.setItem("username", data.user.username);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

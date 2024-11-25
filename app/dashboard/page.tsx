@@ -1,10 +1,10 @@
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Search, Send, Phone, Video, MoreVertical } from "lucide-react";
-
+import { Search, Send, Phone, Video, MoreVertical, LogOut } from "lucide-react";
+import { useRouter } from "next/navigation";
 interface Contact {
   name: string;
   image: string;
@@ -17,52 +17,78 @@ const Page = () => {
   const [query, setQuery] = useState("");
   const [currentMessage, setCurrentMessage] = useState("");
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
-  const [contacts, setContacts] = useState<Contact[]>([
-    {
-      name: "John Doe",
-      image: "https://api.dicebear.com/6.x/avataaars/svg?seed=John",
-      status: "online",
-      lastMessage: "Hey, how are you?",
-      lastMessageTime: "2min ago",
-    },
-    {
-      name: "Jane Smith",
-      image: "https://api.dicebear.com/6.x/avataaars/svg?seed=Jane",
-      status: "offline",
-      lastMessage: "See you later!",
-      lastMessageTime: "5min ago",
-    },
-    {
-      name: "Bob Johnson",
-      image: "https://api.dicebear.com/6.x/avataaars/svg?seed=Bob",
-      status: "online",
-      lastMessage: "Let's catch up soon.",
-      lastMessageTime: "10min ago",
-    },
-    {
-      name: "Alice Brown",
-      image: "https://api.dicebear.com/6.x/avataaars/svg?seed=Alice",
-      status: "offline",
-      lastMessage: "Good night!",
-      lastMessageTime: "15min ago",
-    },
-  ]);
+  const [allContacts, setAllContacts] = useState<Contact[]>([]);
+
+  const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
+
+  const router = useRouter();
+
+  useEffect(() => {
+    const filtered = allContacts.filter((contact) =>
+      contact.name.toLowerCase().includes(query.toLowerCase())
+    );
+    setFilteredContacts(filtered);
+  }, [query, allContacts]);
+
+  useEffect(() => {
+    const FetchContacts = async () => {
+      try {
+        const response = await fetch("http://localhost:3001/users");
+        const data = await response.json();
+        const currentUser = localStorage.getItem("username");
+
+        const formattedContacts = data
+          .filter((user: any) => user.username !== currentUser)
+          .map((user: any) => ({
+            name: user.username,
+            image: `https://api.dicebear.com/6.x/avataaars/svg?seed=${user.username}`,
+            status: "offline",
+            lastMessage: "",
+            lastMessageTime: "",
+          }));
+
+        setAllContacts(formattedContacts);
+      } catch (error) {
+        console.error("Error fetching contacts:", error);
+      }
+    };
+
+    FetchContacts();
+  }, []);
 
   const handleSendMessage = () => {
     if (!currentMessage.trim()) return;
-    // Add message sending logic here
     setCurrentMessage("");
   };
 
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      router.push("/login");
+    }
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("username");
+    router.push("/login");
+  };
+
   return (
-    <div className="flex h-screen bg-gradient-to-b from-gray-900 to-black">
+    <div className="flex h-screen bg-gradient-to-b from-gray-900 to-black overflow-hidden">
       {/* Contacts Sidebar */}
       <div className="w-80 border-r border-gray-800 bg-gray-900/50">
         <div className="p-4 border-b border-gray-800">
-          <h1 className="text-xl font-bold text-white mb-4">Messages</h1>
+          <div className="flex felx-col justify-between items-center">
+            <h1 className="text-xl font-bold text-white mb-4">Messages</h1>
+            <button onClick={handleLogout}>
+              <LogOut className=" text-red-500 mb-4" />
+            </button>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
             <Input
+              type="text"
               placeholder="Search contacts..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -70,9 +96,8 @@ const Page = () => {
             />
           </div>
         </div>
-
         <ScrollArea className="h-[calc(100vh-5rem)]">
-          {contacts.map((contact) => (
+          {filteredContacts.map((contact) => (
             <div
               key={contact.name}
               onClick={() => setSelectedContact(contact)}
