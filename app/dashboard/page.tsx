@@ -1,12 +1,10 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useLayoutEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Search, Send, Phone, Video, MoreVertical, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { cacheTag } from "next/dist/server/use-cache/cache-tag";
-import { headers } from "next/headers";
 import io, { Socket } from "socket.io-client";
 import { format } from "date-fns";
 
@@ -18,15 +16,26 @@ interface Contact {
   lastMessageTime?: string;
 }
 interface Message {
+  _id: string;
   sender: string;
   receiver: string;
   message: string;
   time: string;
   senderUsername: string;
   receiverUsername: string;
+  formattedTime?: string;
 }
 
 let socket: Socket | null = null;
+
+const formatMessageDate = (dateString: string) => {
+  try {
+    const date = new Date(dateString);
+    return isNaN(date.getTime()) ? "Invalid time" : format(date, "HH:mm");
+  } catch {
+    return "Invalid time";
+  }
+};
 
 const Page = () => {
   const [query, setQuery] = useState("");
@@ -34,6 +43,7 @@ const Page = () => {
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [formattedMessages, setFormattedMessages] = useState<Message[]>([]);
 
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
 
@@ -62,16 +72,7 @@ const Page = () => {
         const data = await response.json();
 
         if (data.success) {
-          setMessages(
-            data.data.map((msg: any) => ({
-              sender: msg.senderId,
-              receiver: msg.receiverId,
-              message: msg.content,
-              time: msg.createdAt,
-              senderUsername: msg.senderUsername,
-              receiverUsername: msg.receiverUsername,
-            }))
-          );
+          setMessages(data.data);
         }
       } catch (error) {
         console.error("Error fetching messages:", error);
@@ -92,34 +93,14 @@ const Page = () => {
         console.log("Connected to socket server");
       });
 
-      socket.on("new-message", (message: any) => {
+      socket.on("new-message", (message: Message) => {
         if (selectedContact?.name === message.senderUsername) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              sender: message.senderId,
-              receiver: message.receiverId,
-              message: message.content,
-              time: message.createdAt,
-              senderUsername: message.senderUsername,
-              receiverUsername: message.receiverUsername,
-            },
-          ]);
+          setMessages((prev) => [...prev, message]);
         }
       });
 
-      socket.on("message-sent", (message: any) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            sender: message.senderId,
-            receiver: message.receiverId,
-            message: message.content,
-            time: message.createdAt,
-            senderUsername: localStorage.getItem("username") || "",
-            receiverUsername: selectedContact?.name || "",
-          },
-        ]);
+      socket.on("message-sent", (message: Message) => {
+        setMessages((prev) => [...prev, message]);
       });
 
       return () => {
@@ -207,6 +188,17 @@ const Page = () => {
     localStorage.removeItem("username");
     router.push("/login");
   };
+
+  useLayoutEffect(() => {
+    if (typeof window !== "undefined") {
+      setFormattedMessages(
+        messages.map((msg) => ({
+          ...msg,
+          formattedTime: formatMessageDate(msg.time),
+        }))
+      );
+    }
+  }, [messages]);
 
   return (
     <div className="flex h-screen bg-gradient-to-b from-gray-900 to-black overflow-hidden">
@@ -303,12 +295,12 @@ const Page = () => {
           {/* Messages Area */}
           <ScrollArea className="flex-1 p-4">
             <div className="space-y-4">
-              {messages.map((msg, idx) => {
+              {formattedMessages.map((msg) => {
                 const isCurrentUser =
                   msg.senderUsername === localStorage.getItem("username");
                 return (
                   <div
-                    key={idx}
+                    key={msg._id}
                     className={`flex ${
                       isCurrentUser ? "justify-end" : "justify-start"
                     }`}
@@ -322,7 +314,7 @@ const Page = () => {
                     >
                       <p>{msg.message}</p>
                       <p className="text-xs opacity-50 mt-1">
-                        {format(new Date(msg.time), "HH:mm")}
+                        {msg.formattedTime}
                       </p>
                     </div>
                   </div>
