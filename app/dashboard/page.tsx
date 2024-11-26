@@ -1,12 +1,18 @@
 "use client";
-import React, { useEffect, useState, useLayoutEffect } from "react";
+import React, { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Search, Send, Phone, Video, MoreVertical, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import io, { Socket } from "socket.io-client";
 import { format } from "date-fns";
+
+// Dynamically import ScrollArea with no SSR
+const ScrollAreaNoSSR = dynamic(
+  () => import("@/components/ui/scroll-area").then((mod) => mod.ScrollArea),
+  { ssr: false }
+);
 
 interface Contact {
   name: string;
@@ -44,6 +50,7 @@ const Page = () => {
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [formattedMessages, setFormattedMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
 
@@ -59,28 +66,46 @@ const Page = () => {
   useEffect(() => {
     const FetchMessages = async () => {
       if (!selectedContact) return;
+      setIsLoading(true);
 
       try {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          router.push("/login");
+          return;
+        }
+
         const response = await fetch(
           `http://localhost:3001/get-messages/${selectedContact.name}`,
           {
             headers: {
-              Authorization: `Bearer ${localStorage.getItem("token")}`,
+              Authorization: `Bearer ${token}`,
             },
           }
         );
-        const data = await response.json();
 
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
         if (data.success) {
-          setMessages(data.data);
+          const formattedMsgs = data.data.map((msg: Message) => ({
+            ...msg,
+            formattedTime: formatMessageDate(msg.time),
+          }));
+          // Replace messages instead of setting to empty first
+          setMessages(formattedMsgs);
         }
       } catch (error) {
         console.error("Error fetching messages:", error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
     FetchMessages();
-  }, [selectedContact]);
+  }, [selectedContact, router]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -91,16 +116,6 @@ const Page = () => {
 
       socket.on("connect", () => {
         console.log("Connected to socket server");
-      });
-
-      socket.on("new-message", (message: Message) => {
-        if (selectedContact?.name === message.senderUsername) {
-          setMessages((prev) => [...prev, message]);
-        }
-      });
-
-      socket.on("message-sent", (message: Message) => {
-        setMessages((prev) => [...prev, message]);
       });
 
       return () => {
@@ -189,16 +204,41 @@ const Page = () => {
     router.push("/login");
   };
 
-  useLayoutEffect(() => {
-    if (typeof window !== "undefined") {
-      setFormattedMessages(
-        messages.map((msg) => ({
-          ...msg,
-          formattedTime: formatMessageDate(msg.time),
-        }))
-      );
+  useEffect(() => {
+    if (messages.length > 0) {
+      const formattedMsgs = messages.map((msg) => ({
+        ...msg,
+        formattedTime: formatMessageDate(msg.time),
+      }));
+      setFormattedMessages(formattedMsgs);
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (!socket || !selectedContact) return;
+
+    const handleNewMessage = (message: Message) => {
+      const formattedMessage = {
+        ...message,
+        formattedTime: formatMessageDate(message.time),
+      };
+
+      setMessages((prev) => {
+        // Check if message already exists to prevent duplicates
+        const messageExists = prev.some((m) => m._id === message._id);
+        if (messageExists) return prev;
+        return [...prev, formattedMessage];
+      });
+    };
+
+    socket.on("new-message", handleNewMessage);
+    socket.on("message-sent", handleNewMessage);
+
+    return () => {
+      socket?.off("new-message", handleNewMessage);
+      socket?.off("message-sent", handleNewMessage);
+    };
+  }, [socket, selectedContact]);
 
   return (
     <div className="flex h-screen bg-gradient-to-b from-gray-900 to-black overflow-hidden">
@@ -222,7 +262,7 @@ const Page = () => {
             />
           </div>
         </div>
-        <ScrollArea className="h-[calc(100vh-5rem)]">
+        <ScrollAreaNoSSR className="h-[calc(100vh-5rem)]">
           {filteredContacts.map((contact) => (
             <div
               key={contact.name}
@@ -256,7 +296,7 @@ const Page = () => {
               </div>
             </div>
           ))}
-        </ScrollArea>
+        </ScrollAreaNoSSR>
       </div>
 
       {/* Chat Area */}
@@ -293,35 +333,41 @@ const Page = () => {
           </div>
 
           {/* Messages Area */}
-          <ScrollArea className="flex-1 p-4">
-            <div className="space-y-4">
-              {formattedMessages.map((msg) => {
-                const isCurrentUser =
-                  msg.senderUsername === localStorage.getItem("username");
-                return (
-                  <div
-                    key={msg._id}
-                    className={`flex ${
-                      isCurrentUser ? "justify-end" : "justify-start"
-                    }`}
-                  >
+          <ScrollAreaNoSSR className="flex-1 p-4">
+            {isLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <p className="text-gray-400">Loading messages...</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((msg) => {
+                  const isCurrentUser =
+                    msg.senderUsername === localStorage.getItem("username");
+                  return (
                     <div
-                      className={`max-w-[70%] rounded-lg px-4 py-2 ${
-                        isCurrentUser
-                          ? "bg-blue-600 text-white"
-                          : "bg-gray-700 text-gray-200"
+                      key={msg._id}
+                      className={`flex ${
+                        isCurrentUser ? "justify-end" : "justify-start"
                       }`}
                     >
-                      <p>{msg.message}</p>
-                      <p className="text-xs opacity-50 mt-1">
-                        {msg.formattedTime}
-                      </p>
+                      <div
+                        className={`max-w-[70%] rounded-lg px-4 py-2 ${
+                          isCurrentUser
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-700 text-gray-200"
+                        }`}
+                      >
+                        <p>{msg.message}</p>
+                        <p className="text-xs opacity-50 mt-1">
+                          {msg.formattedTime}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </ScrollArea>
+                  );
+                })}
+              </div>
+            )}
+          </ScrollAreaNoSSR>
 
           {/* Message Input */}
           <div className="p-4 border-t border-gray-800 bg-gray-900/30">
@@ -353,4 +399,6 @@ const Page = () => {
   );
 };
 
-export default Page;
+export default dynamic(() => Promise.resolve(Page), {
+  ssr: false,
+});
